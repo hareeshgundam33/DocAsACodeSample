@@ -41,12 +41,12 @@ def to_title(name: str) -> str:
 
 def markdown_to_storage(md_content: str) -> str:
     """
-    Converts Markdown to Confluence storage format, with robust Mermaid support.
-    It separates Mermaid blocks, converts the remaining Markdown to HTML,
-    and then re-injects the Mermaid blocks as unescaped Confluence macros.
+    Converts Markdown to Confluence storage format, with robust Mermaid support
+    using an HTML comment as a placeholder to avoid being processed by the markdown converter.
     """
     mermaid_blocks = {}
-    placeholder_template = "___MERMAID_PLACEHOLDER_{}___"
+    # Use an HTML comment as a placeholder, which markdown parsers ignore.
+    placeholder_template = "<!--MERMAID_PLACEHOLDER_{}-->"
     
     def find_and_replace_mermaid(match):
         block_id = len(mermaid_blocks)
@@ -59,17 +59,17 @@ def markdown_to_storage(md_content: str) -> str:
                  f'</ac:structured-macro>')
         mermaid_blocks[block_id] = macro
         
-        # Return a unique placeholder
+        # Return the HTML comment placeholder
         return placeholder_template.format(block_id)
 
     # Regex to find mermaid code blocks
     mermaid_pattern = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
     
-    # 1. Replace all mermaid blocks with placeholders
-    md_without_mermaid = mermaid_pattern.sub(find_and_replace_mermaid, md_content)
+    # 1. Replace all mermaid blocks with HTML comment placeholders
+    md_with_placeholders = mermaid_pattern.sub(find_and_replace_mermaid, md_content)
     
-    # 2. Convert the remaining Markdown content to HTML.
-    html_body = markdown.markdown(md_without_mermaid, extensions=['fenced_code', 'tables'])
+    # 2. Convert the remaining Markdown content to HTML. The placeholders will be untouched.
+    html_body = markdown.markdown(md_with_placeholders, extensions=['fenced_code', 'tables'])
     
     # 3. Replace the placeholders in the generated HTML with the actual Confluence macros.
     final_html = html_body
@@ -284,10 +284,11 @@ def main():
         # A page should be archived if it's not in our local file list.
         # We also add several guards to prevent accidental archival of important pages.
         is_managed = key in local_markdown_pages
-        is_main_parent = str(key[0]) == str(CONFLUENCE_PARENT_PAGE_ID)
-        is_archive_page = str(remote_page['id']) == str(archive_parent_id)
+        # Guard against archiving the root parent page of the entire documentation structure
+        is_main_sync_parent = str(remote_page.get('id')) == str(CONFLUENCE_PARENT_PAGE_ID)
+        is_archive_page = str(remote_page.get('id')) == str(archive_parent_id)
 
-        if not is_managed and not is_main_parent and not is_archive_page:
+        if not is_managed and not is_main_sync_parent and not is_archive_page:
             archive_info = {**remote_page, "title": key[1], "parent_id": key[0]}
             pages_to_archive.append(archive_info)
 
@@ -330,7 +331,6 @@ def main():
                 confluence.update_page(
                     page_id=page['id'], title=page['title'],
                     parent_id=archive_parent_id,
-                    # We pass the current version number to avoid conflicts if the page was edited recently
                     version_comment="Archived by sync script because file no longer exists locally.",
                     minor_edit=True
                 )
