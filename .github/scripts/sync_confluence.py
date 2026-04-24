@@ -41,41 +41,36 @@ def to_title(name: str) -> str:
 
 def markdown_to_storage(md_content: str) -> str:
     """
-    Converts Markdown to Confluence storage format, with robust Mermaid support
-    using an HTML comment as a placeholder to avoid being processed by the markdown converter.
+    Converts Markdown to Confluence storage format using a robust "split and process" method.
+    This ensures the markdown converter never interferes with Mermaid blocks.
     """
-    mermaid_blocks = {}
-    # Use an HTML comment as a placeholder, which markdown parsers ignore.
-    placeholder_template = "<!--MERMAID_PLACEHOLDER_{}-->"
+    # This pattern will split the text by mermaid blocks, keeping the mermaid blocks as part of the list.
+    mermaid_pattern = re.compile(r"(```mermaid\n.*?\n```)", re.DOTALL)
+    parts = mermaid_pattern.split(md_content)
     
-    def find_and_replace_mermaid(match):
-        block_id = len(mermaid_blocks)
-        mermaid_code = match.group(1).strip()
-        
-        # Create the Confluence macro for this block
-        macro = (f'<ac:structured-macro ac:name="mermaid">'
-                 f'<ac:parameter ac:name="width">100%</ac:parameter>'
-                 f'<ac:plain-text-body><![CDATA[{mermaid_code}]]></ac:plain-text-body>'
-                 f'</ac:structured-macro>')
-        mermaid_blocks[block_id] = macro
-        
-        # Return the HTML comment placeholder
-        return placeholder_template.format(block_id)
-
-    # Regex to find mermaid code blocks
-    mermaid_pattern = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
+    final_html_parts = []
     
-    # 1. Replace all mermaid blocks with HTML comment placeholders
-    md_with_placeholders = mermaid_pattern.sub(find_and_replace_mermaid, md_content)
-    
-    # 2. Convert the remaining Markdown content to HTML. The placeholders will be untouched.
-    html_body = markdown.markdown(md_with_placeholders, extensions=['fenced_code', 'tables'])
-    
-    # 3. Replace the placeholders in the generated HTML with the actual Confluence macros.
-    final_html = html_body
-    for block_id, macro in mermaid_blocks.items():
-        final_html = final_html.replace(placeholder_template.format(block_id), macro)
-        
+    for part in parts:
+        # Check if the part is a mermaid block (it will be an exact match of the delimiter)
+        if part.startswith("```mermaid"):
+            # Extract the inner content from the full mermaid block
+            inner_content_match = re.search(r"```mermaid\n(.*?)\n```", part, re.DOTALL)
+            if inner_content_match:
+                mermaid_code = inner_content_match.group(1).strip()
+                # Directly convert this part to the Confluence macro
+                macro = (f'<ac:structured-macro ac:name="mermaid">'
+                         f'<ac:parameter ac:name="width">100%</ac:parameter>'
+                         f'<ac:plain-text-body><![CDATA[{mermaid_code}]]></ac:plain-text-body>'
+                         f'</ac:structured-macro>')
+                final_html_parts.append(macro)
+        elif part.strip(): # Ensure the part has content before processing
+            # This is a regular markdown part, so convert it to HTML
+            html_part = markdown.markdown(part, extensions=['fenced_code', 'tables'])
+            final_html_parts.append(html_part)
+            
+    # Join all the processed parts back together
+    final_html = "".join(final_html_parts)
+    # The 'markdown-body' div is for styling and is optional but good practice.
     return f'<div class="markdown-body">{final_html}</div>'
 
 def find_page_in_space_by_title(title: str):
@@ -284,7 +279,6 @@ def main():
         # A page should be archived if it's not in our local file list.
         # We also add several guards to prevent accidental archival of important pages.
         is_managed = key in local_markdown_pages
-        # Guard against archiving the root parent page of the entire documentation structure
         is_main_sync_parent = str(remote_page.get('id')) == str(CONFLUENCE_PARENT_PAGE_ID)
         is_archive_page = str(remote_page.get('id')) == str(archive_parent_id)
 
