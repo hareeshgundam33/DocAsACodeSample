@@ -14,6 +14,10 @@ CONFLUENCE_SPACE_KEY = os.environ.get('CONFLUENCE_SPACE_KEY')
 CONFLUENCE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_PARENT_PAGE_ID')
 CONFLUENCE_ARCHIVE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_ARCHIVE_PARENT_PAGE_ID')
 
+# NEW: Optional variable to control Mermaid syntax. Defaults to 'mermaid' macro.
+# Set this to 'codeblock' in your CI/CD secrets to use the other syntax.
+CONFLUENCE_MERMAID_SYNTAX = os.environ.get('CONFLUENCE_MERMAID_SYNTAX', 'mermaid')
+
 DOCS_FOLDER = "docs"
 ARCHIVE_FOLDER_TITLE = "Archive"
 
@@ -54,21 +58,28 @@ def markdown_to_storage(md_content: str) -> str:
             inner_content_match = re.search(r"```mermaid\n(.*?)\n```", part, re.DOTALL)
             if inner_content_match:
                 mermaid_code = inner_content_match.group(1).strip()
-                
-                # **THE FINAL FIX: Clean the Mermaid code of non-breaking spaces (U+00A0)**
                 cleaned_mermaid_code = mermaid_code.replace(u'\xa0', u' ')
 
-                macro = (f'<ac:structured-macro ac:name="code">'
-                         f'<ac:parameter ac:name="language">mermaid</ac:parameter>'
-                         f'<ac:plain-text-body><![CDATA[{cleaned_mermaid_code}]]></ac:plain-text-body>'
-                         f'</ac:structured-macro>')
+                # **THE CONFIGURABLE FIX**
+                if CONFLUENCE_MERMAID_SYNTAX == 'codeblock':
+                    # Method A: Use a 'code' macro with language set to 'mermaid'
+                    macro = (f'<ac:structured-macro ac:name="code">'
+                             f'<ac:parameter ac:name="language">mermaid</ac:parameter>'
+                             f'<ac:plain-text-body><![CDATA[{cleaned_mermaid_code}]]></ac:plain-text-body>'
+                             f'</ac:structured-macro>')
+                else:
+                    # Method B (Default): Use a dedicated 'mermaid' macro
+                    macro = (f'<ac:structured-macro ac:name="mermaid">'
+                             f'<ac:plain-text-body><![CDATA[{cleaned_mermaid_code}]]></ac:plain-text-body>'
+                             f'</ac:structured-macro>')
+                
                 final_html_parts.append(macro)
         elif part.strip():
             html_part = markdown.markdown(part, extensions=['fenced_code', 'tables'])
             final_html_parts.append(html_part)
             
-    final_html = "".join(final_html_parts)
-    return f'<div class="markdown-body">{final_html}</div>'
+    # Join all parts and remove the outer 'markdown-body' div as a precaution
+    return "".join(final_html_parts)
 
 def find_page_in_space_by_title(title: str):
     """Finds a page in the Confluence space by its title."""
@@ -172,6 +183,7 @@ def main():
     print(f"  - Syncing Markdown from local folder: '{DOCS_FOLDER}'")
     print(f"  - To Confluence Space: '{CONFLUENCE_SPACE_KEY}'")
     print(f"  - Under Parent Page ID: '{CONFLUENCE_PARENT_PAGE_ID}'")
+    print(f"  - Using Mermaid Syntax: '{CONFLUENCE_MERMAID_SYNTAX}'") # Log which syntax is being used
 
     # 2. --- Build Folder Hierarchy in Confluence ---
     print("\n--- 2. Building Confluence Folder Hierarchy ---")

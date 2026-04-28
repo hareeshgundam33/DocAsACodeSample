@@ -3,5 +3,5 @@
 graph TD
     A[Start] --> B(Sync Code);
     B --> C{Success?};
-    C -->|Yes| D[Check Conflnces];
+    C -->|Yes| D[Check Confces];
     C -->|No| F[Check Logs];
