@@ -9,7 +9,7 @@ import markdown
 # --- Configuration from environment ---
 CONFLUENCE_URL = os.environ.get('CONFLUENCE_URL')
 CONFLUENCE_USERNAME = os.environ.get('CONFLUENCE_USERNAME')
-CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN')
+CONFLUENCE_API_TOKEN = os.environ.get('CONfluence_API_TOKEN')
 CONFLUENCE_SPACE_KEY = os.environ.get('CONFLUENCE_SPACE_KEY')
 CONFLUENCE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_PARENT_PAGE_ID')
 CONFLUENCE_ARCHIVE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_ARCHIVE_PARENT_PAGE_ID')
@@ -41,38 +41,34 @@ def to_title(name: str) -> str:
 
 def markdown_to_storage(md_content: str) -> str:
     """
-    Converts Markdown to Confluence storage format using a robust "split and process" method.
-    This ensures the markdown converter never interferes with Mermaid blocks.
+    Converts Markdown to Confluence storage format using a robust "split and process" method
+    and cleans the Mermaid code of invalid characters.
     """
-    # This pattern will split the text by mermaid blocks, keeping the mermaid blocks as part of the list.
     mermaid_pattern = re.compile(r"(```mermaid\n.*?\n```)", re.DOTALL)
     parts = mermaid_pattern.split(md_content)
     
     final_html_parts = []
     
     for part in parts:
-        # Check if the part is a mermaid block (it will start with ```mermaid)
         if part.startswith("```mermaid"):
-            # Extract the inner content from the full mermaid block
             inner_content_match = re.search(r"```mermaid\n(.*?)\n```", part, re.DOTALL)
             if inner_content_match:
                 mermaid_code = inner_content_match.group(1).strip()
-                # Directly convert this part to the Confluence 'code' macro.
+                
+                # **THE FINAL FIX: Clean the Mermaid code of non-breaking spaces (U+00A0)**
+                cleaned_mermaid_code = mermaid_code.replace(u'\xa0', u' ')
+
                 macro = (f'<ac:structured-macro ac:name="code">'
                          f'<ac:parameter ac:name="language">mermaid</ac:parameter>'
-                         f'<ac:plain-text-body><![CDATA[{mermaid_code}]]></ac:plain-text-body>'
+                         f'<ac:plain-text-body><![CDATA[{cleaned_mermaid_code}]]></ac:plain-text-body>'
                          f'</ac:structured-macro>')
                 final_html_parts.append(macro)
-        elif part.strip(): # Ensure the part has content before processing
-            # This is a regular markdown part, so convert it to HTML.
+        elif part.strip():
             html_part = markdown.markdown(part, extensions=['fenced_code', 'tables'])
             final_html_parts.append(html_part)
             
-    # Join all the processed parts back together.
     final_html = "".join(final_html_parts)
-    # The 'markdown-body' div is for styling and is optional but good practice.
     return f'<div class="markdown-body">{final_html}</div>'
-
 
 def find_page_in_space_by_title(title: str):
     """Finds a page in the Confluence space by its title."""
@@ -162,7 +158,6 @@ def ensure_archive_parent() -> str:
     # 2. If the variable is not set or invalid, create/find a default 'Archive' page under the main parent.
     print(f"  Ensuring default '{ARCHIVE_FOLDER_TITLE}' page exists under main parent {CONFLUENCE_PARENT_PAGE_ID}.")
     return ensure_folder_page(ARCHIVE_FOLDER_TITLE, CONFLUENCE_PARENT_PAGE_ID)
-
 # --- Main Execution ---
 
 def main():
