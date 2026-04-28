@@ -9,8 +9,7 @@ import markdown
 # --- Configuration from environment ---
 CONFLUENCE_URL = os.environ.get('CONFLUENCE_URL')
 CONFLUENCE_USERNAME = os.environ.get('CONFLUENCE_USERNAME')
-# 1. CORRECTED VARIABLE NAME
-CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN')
+CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN') # Corrected
 CONFLUENCE_SPACE_KEY = os.environ.get('CONFLUENCE_SPACE_KEY')
 CONFLUENCE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_PARENT_PAGE_ID')
 CONFLUENCE_ARCHIVE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_ARCHIVE_PARENT_PAGE_ID')
@@ -42,41 +41,43 @@ def to_title(name: str) -> str:
 
 def markdown_to_storage(md_content: str) -> str:
     """
-    Converts Markdown to Confluence storage format, with robust Mermaid support
-    using an HTML comment placeholder. This version correctly creates a 'code' macro.
+    Converts Markdown to Confluence storage format using a robust placeholder method
+    to ensure Mermaid blocks are not processed by the markdown converter.
     """
     mermaid_blocks = {}
-    # Use an HTML comment as a placeholder, which markdown parsers will ignore.
+    # Use an HTML comment as a placeholder, which markdown parsers will ignore by design.
     placeholder_template = "<!--MERMAID_PLACEHOLDER_{}-->"
     
     def find_and_replace_mermaid(match):
         block_id = len(mermaid_blocks)
         mermaid_code = match.group(1).strip()
         
-        # 3. CORRECTED MERMAID LOGIC: Create a 'code' macro with language 'mermaid'.
+        # This is the correct macro for modern Confluence Mermaid plugins.
         macro = (f'<ac:structured-macro ac:name="code">'
                  f'<ac:parameter ac:name="language">mermaid</ac:parameter>'
                  f'<ac:plain-text-body><![CDATA[{mermaid_code}]]></ac:plain-text-body>'
                  f'</ac:structured-macro>')
         mermaid_blocks[block_id] = macro
         
+        # Return the placeholder that the markdown converter will ignore.
         return placeholder_template.format(block_id)
 
+    # This regex finds all ```mermaid blocks.
     mermaid_pattern = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
     
-    # 1. Replace mermaid blocks with placeholders that markdown lib will ignore.
+    # 1. Replace all mermaid blocks with HTML comment placeholders.
     md_with_placeholders = mermaid_pattern.sub(find_and_replace_mermaid, md_content)
     
-    # 2. Convert the rest of the markdown to HTML.
+    # 2. Convert the rest of the markdown to HTML. The placeholders will pass through untouched.
     html_body = markdown.markdown(md_with_placeholders, extensions=['fenced_code', 'tables'])
     
-    # 3. Replace placeholders with the real, unescaped Confluence macros.
+    # 3. Replace the untouched placeholders with the real, unescaped Confluence macros.
     final_html = html_body
     for block_id, macro in mermaid_blocks.items():
         final_html = final_html.replace(placeholder_template.format(block_id), macro)
         
+    # Wrap in a div for consistent styling on the Confluence page.
     return f'<div class="markdown-body">{final_html}</div>'
-
 
 def find_page_in_space_by_title(title: str):
     """Finds a page in the Confluence space by its title."""
@@ -89,7 +90,6 @@ def find_page_in_space_by_title(title: str):
         return page
     except Exception:
         return None
-
 def ensure_folder_page(folder_title: str, parent_id: str) -> str:
     """
     Ensures a Confluence page for a folder exists under the correct parent and returns its ID.
@@ -267,7 +267,7 @@ def main():
         elif local_page['hash'] != remote_page['hash']:
             pages_to_update.append({**local_page, **remote_page})
 
-    # 2. CORRECTED ARCHIVE LOGIC
+    # Corrected Archive Logic
     archive_parent_id = ensure_archive_parent()
     pages_to_archive = []
     # This set contains the IDs of all folder pages managed by this script.
