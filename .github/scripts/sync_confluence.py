@@ -36,17 +36,26 @@ def to_title(name: str) -> str:
 
 def markdown_to_storage(md_content: str) -> str:
     """Converts Markdown content to Confluence storage format (HTML), with support for Mermaid diagrams."""
-    # Replace Mermaid code blocks with Confluence Mermaid macro
+    mermaid_pattern = re.compile(r'```mermaid\s*\r?\n(.*?)\r?\n```', re.DOTALL | re.IGNORECASE)
+
+    placeholders = {}
     def replace_mermaid(match):
         mermaid_code = match.group(1).strip()
-        return f'<ac:structured-macro ac:name="mermaid"><ac:plain-text-body><![CDATA[{mermaid_code}]]></ac:plain-text-body></ac:structured-macro>'
-    
-    # Regex to match ```mermaid ... ```
-    mermaid_pattern = re.compile(r'```mermaid\s*\n(.*?)\n```', re.DOTALL | re.IGNORECASE)
+        placeholder = f"MERMAID_PLACEHOLDER_{len(placeholders)}"
+        placeholders[placeholder] = (
+            '<ac:structured-macro ac:name="mermaid"'
+            '<ac:plain-text-body><![CDATA['
+            f'{mermaid_code}'
+            ']]></ac:plain-text-body>'
+            '</ac:structured-macro>'
+        )
+        return placeholder
+
     processed_md = mermaid_pattern.sub(replace_mermaid, md_content)
-    
-    # Convert the rest to HTML
-    html = markdown.markdown(processed_md)
+    html = markdown.markdown(processed_md, extensions=['fenced_code'])
+    for placeholder, macro_html in placeholders.items():
+        html = html.replace(placeholder, macro_html)
+
     return f'<div class="markdown-body">{html}</div>'
 
 def find_page_in_space_by_title(title: str):
