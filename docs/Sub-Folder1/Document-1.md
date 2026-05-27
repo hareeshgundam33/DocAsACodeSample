@@ -1,11 +1,14 @@
-### My Awesome Diagram
+# Sample Document with a Mermaid Diagram
+
+This is a sample markdown document to demonstrate how to embed a Mermaid diagram.
+
+## Mermaid Flowchart Example
+
+Here's a simple flowchart:
 ```mermaid
 graph TD
-    A[Start] --> B(Sync Code);
-    B --> C{Success?};
-    C -->|Yes| D[Check donces];
-    C -->|No| F[Check Logs];
-
-    <div align="left">
-    Please refer <a href="https://allen.ingka.com/docs/default/platform/api-gateway/announcements_releases/release_note/release_note/">Release-Notes</a> to know more.
-</div>
+    A[Start] --> B{Is it a good day?};
+    B -- Yes --> C[Be happy!];
+    B -- No --> D[Try again tomorrow];
+    C --> E[End];
+    D --> E;
