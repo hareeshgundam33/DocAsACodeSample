@@ -1,4 +1,4 @@
-# Sample Document with a Mermaid Diagram
+# Sample Document with a Mermaid Diagram 1
 
 This is a sample markdown document to demonstrate how to embed a Mermaid diagram.
 
