@@ -35,61 +35,12 @@ def to_title(name: str) -> str:
     return name.replace("-", " ").replace("_", " ").strip().title()
 
 
-def extract_and_replace_mermaid_blocks(md_content: str):
-    """
-    Extracts all mermaid code blocks from the markdown content and replaces them
-    with unique placeholders. Returns the modified markdown and a dict mapping
-    placeholder -> mermaid diagram code.
-
-    Confluence does NOT natively render mermaid in markdown.
-    We extract them BEFORE converting markdown to HTML, then re-inject them
-    as Confluence-compatible 'structured macro' storage XML after conversion.
-
-    The Confluence 'Mermaid' macro (from the Mermaid Diagrams for Confluence app)
-    storage format is:
-        <ac:structured-macro ac:name="mermaid">
-            <ac:plain-text-body><![CDATA[ ...diagram code... ]]></ac:plain-text-body>
-        </ac:structured-macro>
-
-    If you do NOT have the Mermaid app installed, we fall back to a styled
-    <pre><code> block so the content is at least readable.
-    """
-    mermaid_blocks = {}
-    counter = [0]
-
-    def replacer(match):
-        diagram_code = match.group(1).strip()
-        placeholder = f"MERMAID_PLACEHOLDER_{counter[0]}_END"
-        mermaid_blocks[placeholder] = diagram_code
-        counter[0] += 1
-        # Replace the mermaid block with a plain paragraph placeholder
-        # so the markdown parser does not mangle it
-        return f"\n\nMERMAID_PLACEHOLDER_{counter[0] - 1}_END\n\n"
-
-    # Match ```mermaid ... ``` blocks (case-insensitive, multiline)
-    pattern = re.compile(r'```mermaid\s*\n(.*?)```', re.DOTALL | re.IGNORECASE)
-    modified_md = pattern.sub(replacer, md_content)
-
-    return modified_md, mermaid_blocks
-
-
 def mermaid_code_to_confluence_macro(diagram_code: str) -> str:
     """
     Converts mermaid diagram code into a Confluence storage format macro.
-
-    This uses the 'mermaid' structured macro which is provided by the
-    'Mermaid Diagrams for Confluence' marketplace app.
-
-    Storage format reference:
-    https://confluence.atlassian.com/doc/confluence-storage-format-790796544.html
-
-    If the app is not installed, the macro will appear as an unknown macro
-    in Confluence but the diagram code will still be visible/readable inside it.
-
-    Alternative fallback (commented below) uses a styled code block.
+    Requires the 'Mermaid Diagrams for Confluence' marketplace app.
     """
-    # Primary: Confluence Mermaid macro (requires Mermaid app installed)
-    macro = (
+    return (
         '<ac:structured-macro ac:name="mermaid" ac:schema-version="1">'
         '<ac:plain-text-body>'
         f'<![CDATA[{diagram_code}]]>'
@@ -97,51 +48,43 @@ def mermaid_code_to_confluence_macro(diagram_code: str) -> str:
         '</ac:structured-macro>'
     )
 
-    # Fallback (uncomment if you do NOT have the Mermaid app):
-    # macro = (
-    #     '<div style="background:#f4f4f4;border:1px solid #ccc;padding:10px;'
-    #     'border-radius:4px;font-family:monospace;white-space:pre-wrap;">'
-    #     f'<strong>Mermaid Diagram:</strong><br/>{diagram_code}'
-    #     '</div>'
-    # )
-
-    return macro
-
 
 def markdown_to_storage(md_content: str) -> str:
     """
     Converts Markdown content to Confluence storage format (HTML/XML).
 
-    Steps:
-    1. Extract mermaid blocks and replace with placeholders.
-    2. Convert remaining markdown to HTML.
-    3. Re-inject mermaid as Confluence structured macros in place of placeholders.
+    Key fix: Instead of using placeholders (which get corrupted by the
+    markdown parser), we SPLIT the content into alternating segments of
+    [markdown, mermaid, markdown, mermaid, ...], convert only the markdown
+    segments to HTML, and directly inject Confluence macros for mermaid
+    segments. This avoids any corruption by the markdown parser.
     """
-    # Step 1: Extract mermaid blocks
-    modified_md, mermaid_blocks = extract_and_replace_mermaid_blocks(md_content)
+    # Pattern to find ```mermaid ... ``` blocks
+    mermaid_pattern = re.compile(r'```mermaid\s*\n(.*?)```', re.DOTALL | re.IGNORECASE)
 
-    # Step 2: Convert markdown to HTML
-    html = markdown.markdown(
-        modified_md,
-        extensions=['fenced_code', 'tables', 'toc', 'codehilite']
-    )
+    # Split the content into parts: alternating markdown and mermaid segments
+    # re.split with a capturing group gives us [md, mermaid, md, mermaid, ...]
+    parts = mermaid_pattern.split(md_content)
 
-    # Step 3: Replace placeholders with Confluence Mermaid macros
-    for placeholder, diagram_code in mermaid_blocks.items():
-        confluence_macro = mermaid_code_to_confluence_macro(diagram_code)
+    result_html_parts = []
 
-        # The placeholder may appear inside <p> tags after markdown processing
-        # We need to replace the entire <p>PLACEHOLDER</p> with the macro
-        # because Confluence macros cannot be inside <p> tags
-        html = re.sub(
-            rf'<p>\s*{re.escape(placeholder)}\s*</p>',
-            confluence_macro,
-            html
-        )
-        # Also handle case where placeholder is not wrapped in <p>
-        html = html.replace(placeholder, confluence_macro)
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            # Even index -> pure markdown segment (no mermaid), convert to HTML
+            if part.strip():
+                html = markdown.markdown(
+                    part,
+                    extensions=['fenced_code', 'tables', 'toc', 'codehilite']
+                )
+                result_html_parts.append(html)
+        else:
+            # Odd index -> this is the captured mermaid diagram code
+            diagram_code = part.strip()
+            confluence_macro = mermaid_code_to_confluence_macro(diagram_code)
+            result_html_parts.append(confluence_macro)
 
-    return f'<div class="markdown-body">{html}</div>'
+    combined_html = "\n".join(result_html_parts)
+    return f'<div class="markdown-body">{combined_html}</div>'
 
 
 def find_page_in_space_by_title(title: str):
@@ -315,8 +258,8 @@ def main():
                     title = to_title(name_no_ext)
 
                 # Convert markdown to Confluence storage format
-                # Mermaid blocks are automatically extracted and converted
-                # to Confluence structured macros during this step
+                # Mermaid blocks are split out BEFORE markdown parsing
+                # and injected as Confluence macros AFTER — no corruption possible
                 storage = markdown_to_storage(md_content)
                 content_hash = md5(storage)
 
@@ -534,44 +477,6 @@ def main():
     print("Sync complete.")
 
 
-# ---------------------------------------------------------------------------
-# MERMAID SUPPORT - HOW IT WORKS
-# ---------------------------------------------------------------------------
-# When a markdown file contains a mermaid fenced code block like:
-#
-#   ```mermaid
-#   graph TD
-#       A[Start] --> B{Is it a good day?}
-#       B -- Yes --> C[Be happy!]
-#       B -- No --> D[Try again tomorrow]
-#       C --> E[End]
-#       D --> E
-#   ```
-#
-# The markdown_to_storage() function will:
-#   1. Extract the mermaid block BEFORE markdown parsing (so it's not corrupted)
-#   2. Convert the rest of the markdown to HTML normally
-#   3. Re-inject the diagram as a Confluence structured macro:
-#
-#      <ac:structured-macro ac:name="mermaid" ac:schema-version="1">
-#          <ac:plain-text-body><![CDATA[
-#              graph TD
-#                  A[Start] --> B{Is it a good day?}
-#                  ...
-#          ]]></ac:plain-text-body>
-#      </ac:structured-macro>
-#
-# REQUIREMENTS:
-#   - Install the "Mermaid Diagrams for Confluence" app from the Atlassian Marketplace
-#     on your Confluence Cloud instance for diagrams to render visually.
-#   - If the app is NOT installed, the macro will show as unknown but the raw
-#     diagram code will still be readable.
-#
-# MULTIPLE MERMAID DIAGRAMS:
-#   - Multiple mermaid blocks in a single .md file are all supported.
-#   - Each block is independently extracted and converted.
-# ---------------------------------------------------------------------------
-
-
 if __name__ == "__main__":
     main()
+
