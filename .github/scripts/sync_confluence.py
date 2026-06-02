@@ -17,6 +17,9 @@ CONFLUENCE_ARCHIVE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_ARCHIVE_PARENT_PA
 DOCS_FOLDER = "docs"
 ARCHIVE_FOLDER_TITLE = "Archive"
 
+# --- Force update flag: set env var FORCE_UPDATE=true to re-push all pages ---
+FORCE_UPDATE = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
+
 confluence = Confluence(
     url=CONFLUENCE_URL,
     username=CONFLUENCE_USERNAME,
@@ -38,7 +41,13 @@ def to_title(name: str) -> str:
 def mermaid_code_to_confluence_macro(diagram_code: str) -> str:
     """
     Converts mermaid diagram code into a Confluence storage format macro.
-    Requires the 'Mermaid Diagrams for Confluence' marketplace app.
+
+    IMPORTANT: Requires the 'Mermaid Diagrams for Confluence' app from
+    the Atlassian Marketplace to be installed on your Confluence Cloud instance.
+    Without the app, the macro will not render visually.
+
+    Marketplace link:
+    https://marketplace.atlassian.com/apps/1226567/mermaid-diagrams-for-confluence
     """
     return (
         '<ac:structured-macro ac:name="mermaid" ac:schema-version="1">'
@@ -53,24 +62,20 @@ def markdown_to_storage(md_content: str) -> str:
     """
     Converts Markdown content to Confluence storage format (HTML/XML).
 
-    Key fix: Instead of using placeholders (which get corrupted by the
-    markdown parser), we SPLIT the content into alternating segments of
-    [markdown, mermaid, markdown, mermaid, ...], convert only the markdown
-    segments to HTML, and directly inject Confluence macros for mermaid
-    segments. This avoids any corruption by the markdown parser.
+    Strategy: Split content on mermaid fenced code blocks BEFORE any markdown
+    parsing. Even-indexed parts are markdown, odd-indexed parts are mermaid code.
+    This prevents the markdown parser from corrupting mermaid syntax.
     """
-    # Pattern to find ```mermaid ... ``` blocks
     mermaid_pattern = re.compile(r'```mermaid\s*\n(.*?)```', re.DOTALL | re.IGNORECASE)
 
-    # Split the content into parts: alternating markdown and mermaid segments
-    # re.split with a capturing group gives us [md, mermaid, md, mermaid, ...]
+    # Split into alternating [markdown, mermaid_code, markdown, mermaid_code, ...]
     parts = mermaid_pattern.split(md_content)
 
     result_html_parts = []
 
     for i, part in enumerate(parts):
         if i % 2 == 0:
-            # Even index -> pure markdown segment (no mermaid), convert to HTML
+            # Even index -> pure markdown segment, convert to HTML
             if part.strip():
                 html = markdown.markdown(
                     part,
@@ -78,10 +83,11 @@ def markdown_to_storage(md_content: str) -> str:
                 )
                 result_html_parts.append(html)
         else:
-            # Odd index -> this is the captured mermaid diagram code
+            # Odd index -> captured mermaid diagram code, convert to macro
             diagram_code = part.strip()
-            confluence_macro = mermaid_code_to_confluence_macro(diagram_code)
-            result_html_parts.append(confluence_macro)
+            if diagram_code:
+                confluence_macro = mermaid_code_to_confluence_macro(diagram_code)
+                result_html_parts.append(confluence_macro)
 
     combined_html = "\n".join(result_html_parts)
     return f'<div class="markdown-body">{combined_html}</div>'
@@ -106,11 +112,8 @@ def find_page_in_space_by_title(title: str):
 def ensure_folder_page(folder_title: str, parent_id: str) -> str:
     """
     Ensures a Confluence page exists with the given folder_title under parent_id.
-    - If a page with folder_title already exists AND is a descendant of parent_id, return its id.
-    - If a same-title page exists elsewhere, create a NEW page under parent_id.
-    - If it doesn't exist, create it.
     """
-    # 1) Try to find a page with that title under parent_id using CQL
+    # 1) Try CQL to find page under parent
     try:
         cql = f'title = "{folder_title}" AND ancestor = {parent_id} AND type = page'
         res = confluence.cql(cql, limit=1, expand='content.id,content.title')
@@ -180,9 +183,6 @@ def ensure_folder_page(folder_title: str, parent_id: str) -> str:
 def ensure_archive_parent() -> str:
     """
     Ensures we have an actual page id to archive into.
-    Priority:
-    1) Use CONFLUENCE_ARCHIVE_PARENT_PAGE_ID if provided and valid.
-    2) Otherwise, ensure an 'Archive' page exists under CONFLUENCE_PARENT_PAGE_ID.
     """
     if CONFLUENCE_ARCHIVE_PARENT_PAGE_ID:
         try:
@@ -207,12 +207,15 @@ def main():
         print("Error: Missing required Confluence environment variables.")
         sys.exit(1)
 
+    if FORCE_UPDATE:
+        print("⚠️  FORCE_UPDATE=true: All pages will be re-pushed regardless of content hash.")
+
     print(
-        f"Starting sync: Markdown files from '{DOCS_FOLDER}' to Confluence space '{CONFLUENCE_SPACE_KEY}' "
-        f"under parent page ID '{CONFLUENCE_PARENT_PAGE_ID}'."
+        f"Starting sync: Markdown files from '{DOCS_FOLDER}' to Confluence space "
+        f"'{CONFLUENCE_SPACE_KEY}' under parent page ID '{CONFLUENCE_PARENT_PAGE_ID}'."
     )
 
-    # --- 2. Build Confluence Folder Hierarchy based on Git Repo ---
+    # --- 2. Build Confluence Folder Hierarchy ---
     folder_parent_ids = {"": CONFLUENCE_PARENT_PAGE_ID}
 
     if os.path.isdir(DOCS_FOLDER):
@@ -257,9 +260,6 @@ def main():
                 else:
                     title = to_title(name_no_ext)
 
-                # Convert markdown to Confluence storage format
-                # Mermaid blocks are split out BEFORE markdown parsing
-                # and injected as Confluence macros AFTER — no corruption possible
                 storage = markdown_to_storage(md_content)
                 content_hash = md5(storage)
 
@@ -319,7 +319,6 @@ def main():
     pages_to_update_or_move = []
     pages_to_archive = []
 
-    # Identify pages to create or update/move
     for key, local_info in local_markdown_pages.items():
         expected_parent_id = key[0]
         title = key[1]
@@ -354,7 +353,8 @@ def main():
             continue
 
         needs_move = str(remote_info.get('parent_id') or '') != str(expected_parent_id or '')
-        needs_update = local_info['hash'] != remote_info.get('hash')
+        # If FORCE_UPDATE is set, always mark as needing update
+        needs_update = FORCE_UPDATE or (local_info['hash'] != remote_info.get('hash'))
 
         if needs_move or needs_update:
             pages_to_update_or_move.append({
@@ -397,8 +397,6 @@ def main():
         pages_to_archive.append(remote_info)
 
     # --- 6. Execute Actions ---
-
-    # Ensure archive parent
     try:
         archive_parent_page_id = ensure_archive_parent()
     except Exception as e:
@@ -416,9 +414,9 @@ def main():
                 body=p["storage"],
                 representation="storage",
             )
-            print(f"Successfully created '{p['title']}'.")
+            print(f"✅ Successfully created '{p['title']}'.")
         except Exception as e:
-            print(f"Error creating page '{p['title']}': {e}")
+            print(f"❌ Error creating page '{p['title']}': {e}")
 
     # Update or move existing pages
     for p in pages_to_update_or_move:
@@ -435,9 +433,9 @@ def main():
                 body=p["storage"],
                 parent_id=p["target_parent_id"],
             )
-            print(f"Successfully updated/moved '{p['title']}'.")
+            print(f"✅ Successfully updated/moved '{p['title']}'.")
         except Exception as e:
-            print(f"Error updating/moving page '{p['title']}' (ID {p['id']}): {e}")
+            print(f"❌ Error updating/moving page '{p['title']}' (ID {p['id']}): {e}")
 
     # Archive pages no longer in Git repo
     archived_count = 0
@@ -464,15 +462,16 @@ def main():
                 parent_id=archive_parent_page_id,
             )
             archived_count += 1
-            print(f"Successfully archived '{p['title']}' under archive parent (ID {archive_parent_page_id}).")
+            print(f"✅ Successfully archived '{p['title']}' under archive parent (ID {archive_parent_page_id}).")
         except Exception as e:
-            print(f"Error archiving page '{p['title']}' (ID {p['id']}): {e}")
+            print(f"❌ Error archiving page '{p['title']}' (ID {p['id']}): {e}")
 
     # --- 7. Summary ---
     print("\n========== Sync Summary ==========")
     print(f"Pages created  : {len(pages_to_create)}")
     print(f"Pages updated  : {len(pages_to_update_or_move)}")
     print(f"Pages archived : {archived_count}")
+    print(f"Force update   : {FORCE_UPDATE}")
     print("===================================")
     print("Sync complete.")
 
