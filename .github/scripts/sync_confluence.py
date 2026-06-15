@@ -57,11 +57,22 @@ def mermaid_code_to_confluence_macro(diagram_code: str) -> str:
 
     If the app is NOT installed, diagrams will NOT render. The macro
     will appear as an unknown macro block in Confluence.
+
+    Fix applied:
+    - Strips trailing semicolons from each Mermaid line, as some
+      Confluence Mermaid apps fail to render lines ending with semicolons.
     """
+    # Strip trailing semicolons from each line — some Confluence Mermaid apps
+    # fail to render when lines end with semicolons
+    cleaned_lines = [line.rstrip(';') for line in diagram_code.splitlines()]
+    cleaned_code = '\n'.join(cleaned_lines)
+
+    print(f"  [DEBUG] Cleaned mermaid code:\n{cleaned_code}")
+
     return (
         '<ac:structured-macro ac:name="mermaid" ac:schema-version="1">'
         '<ac:plain-text-body>'
-        f'<![CDATA[{diagram_code}]]>'
+        f'<![CDATA[{cleaned_code}]]>'
         '</ac:plain-text-body>'
         '</ac:structured-macro>'
     )
@@ -116,6 +127,8 @@ def markdown_to_storage(md_content: str) -> str:
             if diagram_code:
                 print(f"  [DEBUG] Processing mermaid block:\n    {diagram_code[:80]}...")
                 confluence_macro = mermaid_code_to_confluence_macro(diagram_code)
+                # Debug: show the generated macro snippet
+                print(f"  [DEBUG] Generated macro snippet:\n    {confluence_macro[:200]}...")
                 result_html_parts.append(confluence_macro)
 
     combined_html = "\n".join(result_html_parts)
@@ -299,6 +312,17 @@ def main():
                 storage = markdown_to_storage(md_content)
                 content_hash = md5(storage)
 
+                # Debug: warn if mermaid macro is missing from storage output
+                if '```mermaid' in md_content.lower() and 'ac:name="mermaid"' not in storage:
+                    print(
+                        f"  ⚠️  WARNING: Mermaid block found in '{filepath}' but NO macro "
+                        f"was generated in the storage output. Check the regex and content."
+                    )
+                elif 'ac:name="mermaid"' in storage:
+                    print(
+                        f"  ✅ Mermaid macro successfully generated for '{filepath}'."
+                    )
+
                 key = (confluence_parent_id_for_current_folder, title)
                 local_markdown_pages[key] = {
                     "title": title,
@@ -440,6 +464,12 @@ def main():
     # Create new pages
     for p in pages_to_create:
         print(f"Creating page '{p['title']}' under parent {p['parent_id']} from {p['filepath']}.")
+
+        # Debug: show mermaid macro snippet if present
+        if 'ac:name="mermaid"' in p['storage']:
+            macro_start = p['storage'].find('<ac:structured-macro')
+            print(f"  [DEBUG] Mermaid macro in storage:\n  {p['storage'][macro_start:macro_start+300]}...")
+
         try:
             confluence.create_page(
                 space=CONFLUENCE_SPACE_KEY,
@@ -460,6 +490,12 @@ def main():
             else "updating content"
         )
         print(f"Processing page '{p['title']}' (ID {p['id']}): {move_desc} from {p['filepath']}.")
+
+        # Debug: show mermaid macro snippet if present
+        if 'ac:name="mermaid"' in p['storage']:
+            macro_start = p['storage'].find('<ac:structured-macro')
+            print(f"  [DEBUG] Mermaid macro in storage:\n  {p['storage'][macro_start:macro_start+300]}...")
+
         try:
             confluence.update_page(
                 page_id=p["id"],
@@ -508,6 +544,7 @@ def main():
     print(f"Force update   : {FORCE_UPDATE}")
     print("===================================")
     print("Sync complete.")
+
 
 if __name__ == "__main__":
     main()
