@@ -8,7 +8,7 @@ Here's a simple flowchart:
 ```mermaid
 graph TD
     A[Start] --> B{Is it a good day?};
-    B -- Yes --> C[Be happy!again ];
+    B -- Yes --> C[Be happy];
     B -- No --> D[Try again tomorrow];
     C --> E[End];
     D --> E;
