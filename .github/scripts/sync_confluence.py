@@ -17,7 +17,20 @@ CONFLUENCE_ARCHIVE_PARENT_PAGE_ID = os.environ.get('CONFLUENCE_ARCHIVE_PARENT_PA
 DOCS_FOLDER = "docs"
 ARCHIVE_FOLDER_TITLE = "Archive"
 
+# Set FORCE_UPDATE=true env var to re-push all pages regardless of hash
 FORCE_UPDATE = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
+
+# --- Mermaid macro name ---
+# Different Confluence Mermaid apps use different macro names.
+# Set MERMAID_MACRO_NAME in your GitHub Actions env to switch between them.
+# Common values:
+#   "mermaid"                        -> Mermaid Diagrams for Confluence (Stratus Add-ons)
+#   "mermaid-cloud"                  -> Mermaid Charts & Diagrams for Confluence (weweave)
+#   "mermaid-vt"                     -> Mermaid for Confluence (Tech Labs)
+#   "mermaidjs"                      -> Some other vendors
+# To find the exact name: Edit a Confluence page -> Insert Mermaid macro ->
+# Save -> open page URL with ?view=storage -> look for ac:name="..."
+MERMAID_MACRO_NAME = os.environ.get('MERMAID_MACRO_NAME', 'mermaid-cloud')
 
 confluence = Confluence(
     url=CONFLUENCE_URL,
@@ -40,21 +53,29 @@ def normalize_line_endings(text: str) -> str:
 
 
 def mermaid_code_to_confluence_macro(diagram_code: str) -> str:
+    """
+    Converts mermaid diagram code into a Confluence storage format macro.
+    - Strips trailing semicolons from each line (fixes rendering issues)
+    - Strips leading/trailing whitespace
+    - Uses MERMAID_MACRO_NAME env var to control which app macro is used
+    """
     cleaned_lines = [line.rstrip(';') for line in diagram_code.splitlines()]
     cleaned_code = '\n'.join(cleaned_lines).strip()
+    print(f"  [DEBUG] Using macro name: '{MERMAID_MACRO_NAME}'")
     print(f"  [DEBUG] Cleaned mermaid code:\n{cleaned_code}")
     return (
-        '<ac:structured-macro ac:name="mermaid" ac:schema-version="1">'
-        '<ac:plain-text-body>'
+        f'<ac:structured-macro ac:name="{MERMAID_MACRO_NAME}" ac:schema-version="1">'
+        f'<ac:plain-text-body>'
         f'<![CDATA[{cleaned_code}]]>'
-        '</ac:plain-text-body>'
-        '</ac:structured-macro>'
+        f'</ac:plain-text-body>'
+        f'</ac:structured-macro>'
     )
 
 
 def replace_mermaid_with_placeholders(md_content: str):
     """
     STEP 1: Extract all mermaid blocks BEFORE markdown parsing.
+    Replace each block with a unique safe placeholder string.
 
     Handles ALL fence styles:
     - Backtick fence:     ```mermaid   (most common)
@@ -62,8 +83,10 @@ def replace_mermaid_with_placeholders(md_content: str):
     - Tilde fence:        ~~~mermaid
     - With spaces:        ``` mermaid
     - Case insensitive:   ```MERMAID
+
+    Returns (modified_content, {placeholder_key: diagram_code})
     """
-    # Universal pattern: matches ```, ''', or ~~~  (3 or more of each)
+    # Universal pattern: matches ```, ''', or ~~~ (3 or more of each)
     universal_pattern = re.compile(
         r'(?:^|\n)[ \t]*(?:`{3,}|~{3,}|\'{3,})[ \t]*[Mm][Ee][Rr][Mm][Aa][Ii][Dd][ \t]*\n'
         r'(.*?)\n'
@@ -102,10 +125,12 @@ def replace_mermaid_with_placeholders(md_content: str):
 def restore_mermaid_macros(html_content: str, placeholders: dict) -> str:
     """
     STEP 3: Replace each placeholder in the HTML with the Confluence mermaid macro.
+    Handles both <p>PLACEHOLDER</p> and bare PLACEHOLDER cases.
     """
     for key, diagram_code in placeholders.items():
         macro = mermaid_code_to_confluence_macro(diagram_code)
 
+        # Replace <p>KEY</p> — markdown wraps bare text in <p> tags
         new_html = re.sub(
             rf'<p>\s*{re.escape(key)}\s*</p>',
             macro,
@@ -116,6 +141,7 @@ def restore_mermaid_macros(html_content: str, placeholders: dict) -> str:
             print(f"  [DEBUG] Replaced <p>{key}</p> with macro. ✅")
             html_content = new_html
         elif key in html_content:
+            # Fallback: replace bare KEY if not wrapped in <p>
             html_content = html_content.replace(key, macro)
             print(f"  [DEBUG] Replaced bare {key} with macro. ✅")
         else:
@@ -126,12 +152,13 @@ def restore_mermaid_macros(html_content: str, placeholders: dict) -> str:
 
 def markdown_to_storage(md_content: str) -> str:
     """
-    Converts Markdown to Confluence storage format.
+    Converts Markdown to Confluence storage format using a safe 3-step approach:
 
     STEP 1 — Extract mermaid blocks, replace with safe placeholders
-    STEP 2 — Convert remaining markdown to HTML
-    STEP 3 — Replace placeholders with Confluence mermaid macros
+    STEP 2 — Convert remaining markdown to HTML (placeholders pass through untouched)
+    STEP 3 — Replace placeholders in HTML with Confluence mermaid macros
     """
+    # Normalize line endings (handles Windows CRLF from Git)
     md_content = normalize_line_endings(md_content)
 
     # STEP 1
@@ -147,13 +174,14 @@ def markdown_to_storage(md_content: str) -> str:
     if placeholders:
         html = restore_mermaid_macros(html, placeholders)
 
+    # Verify all placeholders were successfully replaced
     for key in placeholders:
         if key in html:
             print(f"  ⚠️  WARNING: Placeholder '{key}' was NOT replaced in output HTML!")
 
     combined = f'<div class="markdown-body">{html}</div>'
 
-    if placeholders and 'ac:name="mermaid"' not in combined:
+    if placeholders and f'ac:name="{MERMAID_MACRO_NAME}"' not in combined:
         print("  ⚠️  WARNING: Mermaid macro NOT found in final storage output!")
     elif placeholders:
         print("  ✅ Mermaid macro successfully injected into storage output.")
@@ -174,6 +202,7 @@ def find_page_in_space_by_title(title: str):
 
 
 def ensure_folder_page(folder_title: str, parent_id: str) -> str:
+    # 1) CQL search under parent
     try:
         cql = f'title = "{folder_title}" AND ancestor = {parent_id} AND type = page'
         res = confluence.cql(cql, limit=1, expand='content.id,content.title')
@@ -182,6 +211,7 @@ def ensure_folder_page(folder_title: str, parent_id: str) -> str:
     except Exception:
         pass
 
+    # 2) Check anywhere in space
     existing = None
     try:
         existing = confluence.get_page_by_title(
@@ -205,6 +235,7 @@ def ensure_folder_page(folder_title: str, parent_id: str) -> str:
             f"Creating a new folder page under the desired parent."
         )
 
+    # 3) Create under requested parent
     try:
         created = confluence.create_page(
             space=CONFLUENCE_SPACE_KEY,
@@ -218,6 +249,7 @@ def ensure_folder_page(folder_title: str, parent_id: str) -> str:
     except Exception as e:
         print(f"Warning: create_page failed for '{folder_title}': {e}")
 
+    # 4) CQL fallback
     try:
         cql = f'title = "{folder_title}" AND ancestor = {parent_id} AND type = page'
         res = confluence.cql(cql, limit=1, expand='content.id')
@@ -226,6 +258,7 @@ def ensure_folder_page(folder_title: str, parent_id: str) -> str:
     except Exception:
         pass
 
+    # 5) Last resort
     try:
         fallback = confluence.get_page_by_title(space=CONFLUENCE_SPACE_KEY, title=folder_title)
         if fallback and fallback.get('id'):
@@ -253,6 +286,7 @@ def ensure_archive_parent() -> str:
 
 
 def main():
+    # --- 1. Initial Checks ---
     if not all([
         CONFLUENCE_URL,
         CONFLUENCE_USERNAME,
@@ -266,11 +300,13 @@ def main():
     if FORCE_UPDATE:
         print("⚠️  FORCE_UPDATE=true: All pages will be re-pushed regardless of content hash.")
 
+    print(f"ℹ️   Using Mermaid macro name: '{MERMAID_MACRO_NAME}'")
     print(
         f"Starting sync: Markdown files from '{DOCS_FOLDER}' to Confluence space "
         f"'{CONFLUENCE_SPACE_KEY}' under parent page ID '{CONFLUENCE_PARENT_PAGE_ID}'."
     )
 
+    # --- 2. Build Confluence Folder Hierarchy ---
     folder_parent_ids = {"": CONFLUENCE_PARENT_PAGE_ID}
 
     if os.path.isdir(DOCS_FOLDER):
@@ -289,6 +325,7 @@ def main():
     else:
         print(f"Warning: '{DOCS_FOLDER}' directory not found. No Markdown files to process.")
 
+    # --- 3. Discover Local Markdown Files & Prepare Their Content ---
     local_markdown_pages = {}
 
     if os.path.isdir(DOCS_FOLDER):
@@ -316,6 +353,7 @@ def main():
 
                 print(f"\nProcessing file: {filepath} -> title: '{title}'")
 
+                # 3-step mermaid-safe conversion
                 storage = markdown_to_storage(md_content)
                 content_hash = md5(storage)
 
@@ -328,6 +366,7 @@ def main():
                     "filepath": filepath,
                 }
 
+    # --- 4. Fetch ALL existing pages in Confluence ---
     all_existing_confluence_pages_by_key = {}
     all_existing_confluence_pages_by_id = {}
 
@@ -369,6 +408,7 @@ def main():
             print(f"Error fetching all pages from space (start={start}): {e}")
             sys.exit(1)
 
+    # --- 5. Determine Actions ---
     pages_to_create = []
     pages_to_update_or_move = []
     pages_to_archive = []
@@ -422,6 +462,7 @@ def main():
         else:
             print(f"Up to date: {local_info['filepath']} -> '{title}' under parent {expected_parent_id}")
 
+    # Identify pages to archive
     for remote_key, remote_info in all_existing_confluence_pages_by_key.items():
         page_id = remote_info['id']
         title = remote_info['title']
@@ -447,15 +488,17 @@ def main():
 
         pages_to_archive.append(remote_info)
 
+    # --- 6. Execute Actions ---
     try:
         archive_parent_page_id = ensure_archive_parent()
     except Exception as e:
         print(f"Error ensuring archive parent: {e}")
         sys.exit(1)
 
+    # Create new pages
     for p in pages_to_create:
         print(f"\nCreating page '{p['title']}' under parent {p['parent_id']} from {p['filepath']}.")
-        if 'ac:name="mermaid"' in p['storage']:
+        if f'ac:name="{MERMAID_MACRO_NAME}"' in p['storage']:
             macro_start = p['storage'].find('<ac:structured-macro')
             print(f"  [DEBUG] Mermaid macro in storage:\n  {p['storage'][macro_start:macro_start + 300]}")
         try:
@@ -470,6 +513,7 @@ def main():
         except Exception as e:
             print(f"❌ Error creating page '{p['title']}': {e}")
 
+    # Update or move existing pages
     for p in pages_to_update_or_move:
         move_desc = (
             f"moving from parent {p['current_parent_id']} to {p['target_parent_id']}"
@@ -477,7 +521,7 @@ def main():
             else "updating content"
         )
         print(f"\nProcessing page '{p['title']}' (ID {p['id']}): {move_desc} from {p['filepath']}.")
-        if 'ac:name="mermaid"' in p['storage']:
+        if f'ac:name="{MERMAID_MACRO_NAME}"' in p['storage']:
             macro_start = p['storage'].find('<ac:structured-macro')
             print(f"  [DEBUG] Mermaid macro in storage:\n  {p['storage'][macro_start:macro_start + 300]}")
         try:
@@ -491,6 +535,7 @@ def main():
         except Exception as e:
             print(f"❌ Error updating/moving page '{p['title']}' (ID {p['id']}): {e}")
 
+    # Archive pages
     archived_count = 0
     for p in pages_to_archive:
         print(f"\nArchiving page '{p['title']}' (ID {p['id']}) — no longer in Git repo.")
@@ -519,11 +564,13 @@ def main():
         except Exception as e:
             print(f"❌ Error archiving page '{p['title']}' (ID {p['id']}): {e}")
 
+    # --- 7. Summary ---
     print("\n========== Sync Summary ==========")
     print(f"Pages created  : {len(pages_to_create)}")
     print(f"Pages updated  : {len(pages_to_update_or_move)}")
     print(f"Pages archived : {archived_count}")
     print(f"Force update   : {FORCE_UPDATE}")
+    print(f"Mermaid macro  : {MERMAID_MACRO_NAME}")
     print("===================================")
     print("Sync complete.")
 
