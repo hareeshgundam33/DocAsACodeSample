@@ -37,4 +37,4 @@ jobs:
           CONFLUENCE_PARENT_PAGE_ID: ${{ secrets.CONFLUENCE_PARENT_PAGE_ID }}
           CONFLUENCE_ARCHIVE_PARENT_PAGE_ID: ${{ secrets.CONFLUENCE_ARCHIVE_PARENT_PAGE_ID }}
           FORCE_UPDATE: "true"
-          MERMAID_MACRO_NAME: "mermaid-cloud"
+          MERMAID_MACRO_NAME: "mermaid-vt"
