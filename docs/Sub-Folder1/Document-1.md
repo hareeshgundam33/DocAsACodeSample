@@ -4,5 +4,5 @@ graph TD
     B -- Yes --> C[Be happy please];
     B -- No --> D[Try again tomorrow];
     C --> E[End];
-    D --> E[bye];
+    D --> E
 ```
