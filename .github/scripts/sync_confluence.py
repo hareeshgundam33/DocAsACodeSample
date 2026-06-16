@@ -495,7 +495,7 @@ def main():
         print(f"Error ensuring archive parent: {e}")
         sys.exit(1)
 
-    # Create new pages
+    # Create new pages and update
     for p in pages_to_create:
         print(f"\nCreating page '{p['title']}' under parent {p['parent_id']} from {p['filepath']}.")
         if f'ac:name="{MERMAID_MACRO_NAME}"' in p['storage']:
