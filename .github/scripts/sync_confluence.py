@@ -19,6 +19,28 @@ ARCHIVE_FOLDER_TITLE = "Archive"
 
 FORCE_UPDATE = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
 
+# ==============================================================================
+# 🔧 MERMAID MACRO NAME — CHANGE THIS TO MATCH YOUR CONFLUENCE APP
+# ==============================================================================
+# Try these one at a time until the diagram renders correctly in Confluence:
+#
+#   "mermaid"             ← default (currently failing)
+#   "mermaid-techlabs"    ← Mermaid for Confluence by Tech Labs
+#   "mermaidjs"           ← alternate Tech Labs name
+#   "mermaid-weweave"     ← Mermaid Charts & Diagrams by weweave
+#   "mermaid-cloud"       ← weweave alternate name
+#   "mermaid-diagrams"    ← another possible name
+#
+# HOW TO FIND THE CORRECT NAME:
+#   1. Open any Confluence page in your browser (not editing)
+#   2. Add ?expand=body.storage to the page URL OR use browser console:
+#      fetch('/wiki/rest/api/content/PAGE_ID?expand=body.storage')
+#        .then(r => r.json()).then(d => console.log(d.body.storage.value));
+#   3. Search for "mermaid" in the output to find ac:name="CORRECT_NAME"
+# ==============================================================================
+MERMAID_MACRO_NAME = "mermaid"  # 👈 CHANGE THIS VALUE
+
+
 confluence = Confluence(
     url=CONFLUENCE_URL,
     username=CONFLUENCE_USERNAME,
@@ -43,12 +65,13 @@ def mermaid_code_to_confluence_macro(diagram_code: str) -> str:
     cleaned_lines = [line.rstrip(';') for line in diagram_code.splitlines()]
     cleaned_code = '\n'.join(cleaned_lines).strip()
     print(f"  [DEBUG] Cleaned mermaid code:\n{cleaned_code}")
+    print(f"  [DEBUG] Using macro name: '{MERMAID_MACRO_NAME}'")
     return (
-        '<ac:structured-macro ac:name="mermaid" ac:schema-version="1">'
-        '<ac:plain-text-body>'
+        f'<ac:structured-macro ac:name="{MERMAID_MACRO_NAME}" ac:schema-version="1">'
+        f'<ac:plain-text-body>'
         f'<![CDATA[{cleaned_code}]]>'
-        '</ac:plain-text-body>'
-        '</ac:structured-macro>'
+        f'</ac:plain-text-body>'
+        f'</ac:structured-macro>'
     )
 
 
@@ -63,7 +86,6 @@ def replace_mermaid_with_placeholders(md_content: str):
     - With spaces:        ``` mermaid
     - Case insensitive:   ```MERMAID
     """
-    # Universal pattern: matches ```, ''', or ~~~  (3 or more of each)
     universal_pattern = re.compile(
         r'(?:^|\n)[ \t]*(?:`{3,}|~{3,}|\'{3,})[ \t]*[Mm][Ee][Rr][Mm][Aa][Ii][Dd][ \t]*\n'
         r'(.*?)\n'
@@ -153,10 +175,11 @@ def markdown_to_storage(md_content: str) -> str:
 
     combined = f'<div class="markdown-body">{html}</div>'
 
-    if placeholders and 'ac:name="mermaid"' not in combined:
-        print("  ⚠️  WARNING: Mermaid macro NOT found in final storage output!")
+    macro_tag = f'ac:name="{MERMAID_MACRO_NAME}"'
+    if placeholders and macro_tag not in combined:
+        print(f"  ⚠️  WARNING: Mermaid macro '{MERMAID_MACRO_NAME}' NOT found in final storage output!")
     elif placeholders:
-        print("  ✅ Mermaid macro successfully injected into storage output.")
+        print(f"  ✅ Mermaid macro '{MERMAID_MACRO_NAME}' successfully injected into storage output.")
 
     return combined
 
@@ -265,6 +288,9 @@ def main():
 
     if FORCE_UPDATE:
         print("⚠️  FORCE_UPDATE=true: All pages will be re-pushed regardless of content hash.")
+
+    # Print macro name being used so it's visible in GitHub Actions logs
+    print(f"ℹ️  Using Mermaid macro name: '{MERMAID_MACRO_NAME}'")
 
     print(
         f"Starting sync: Markdown files from '{DOCS_FOLDER}' to Confluence space "
@@ -455,7 +481,8 @@ def main():
 
     for p in pages_to_create:
         print(f"\nCreating page '{p['title']}' under parent {p['parent_id']} from {p['filepath']}.")
-        if 'ac:name="mermaid"' in p['storage']:
+        macro_tag = f'ac:name="{MERMAID_MACRO_NAME}"'
+        if macro_tag in p['storage']:
             macro_start = p['storage'].find('<ac:structured-macro')
             print(f"  [DEBUG] Mermaid macro in storage:\n  {p['storage'][macro_start:macro_start + 300]}")
         try:
@@ -477,7 +504,8 @@ def main():
             else "updating content"
         )
         print(f"\nProcessing page '{p['title']}' (ID {p['id']}): {move_desc} from {p['filepath']}.")
-        if 'ac:name="mermaid"' in p['storage']:
+        macro_tag = f'ac:name="{MERMAID_MACRO_NAME}"'
+        if macro_tag in p['storage']:
             macro_start = p['storage'].find('<ac:structured-macro')
             print(f"  [DEBUG] Mermaid macro in storage:\n  {p['storage'][macro_start:macro_start + 300]}")
         try:
@@ -524,6 +552,7 @@ def main():
     print(f"Pages updated  : {len(pages_to_update_or_move)}")
     print(f"Pages archived : {archived_count}")
     print(f"Force update   : {FORCE_UPDATE}")
+    print(f"Mermaid macro  : {MERMAID_MACRO_NAME}")
     print("===================================")
     print("Sync complete.")
 
