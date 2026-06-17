@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from atlassian import Confluence
 import markdown
 
-# --- Configuration from environment ---
+# --- Configurations from environment ---
 CONFLUENCE_URL = os.environ.get('CONFLUENCE_URL')
 CONFLUENCE_USERNAME = os.environ.get('CONFLUENCE_USERNAME')
 CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN')
